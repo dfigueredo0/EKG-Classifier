@@ -1,0 +1,14 @@
+/.vscode/
+
+.venv/
+.env
+
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.pytest_cache/
+mlruns/
+reports/
+artifacts/
+.coverage
+coverage.xml
