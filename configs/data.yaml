@@ -1,0 +1,35 @@
+paths:
+  raw_ptbxl: ${oc.env:PTBXL_RAW, "data/ptbxl"}
+  raw_mitbih: ${oc.env:MITBIH_RAW, "data/mitbih"}
+  processed: ${oc.env:PROCESSED, "data/processed"}
+  splits_dir: ${oc.env:SPLITS, "data/splits"}
+signals:
+  resample_hz: 500
+  bandpass:
+    low: 0.5
+    high: 40.0
+    order: 4
+  zscore: true
+  required_leads:
+    ['I', 'II', 'III', 'aVR', 'aVL', 'aVF', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6']
+  allow_derive_avr: true
+split:
+  seed: 1337
+  patient_level: true
+  train: 0.8
+  val: 0.1
+  test: 0.1
+augment:
+  jitter_std: 0.01
+  scale_min: 0.9
+  scale_max: 1.1
+  time_warp_max_ratio: 0.05
+ptbxl:
+  load_diagnostic_labels: true
+  use_scored_subset: true
+  min_lead_count: 12
+mitbih:
+  use_for_rhythm_generalization: true
+io:
+  num_workers: 4
+  pin_memory: true
