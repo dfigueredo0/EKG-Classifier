@@ -108,7 +108,7 @@ def iter_ptbxl(
         raise ValueError("No filename_hr or filename_lr column available in metadata.")
 
     for _, row in meta.iterrows():
-        rec_path = root / row[fn_col]  # WFDB path prefix (no extension)
+        rec_path = root / row[fn_col]
         try:
             sig, fs, leads = read_wfdb_record(rec_path)
         except Exception as e:

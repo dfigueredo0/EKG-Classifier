@@ -1,0 +1,17 @@
+hydra:
+  run:
+    dir: .
+eval:
+  batch_size: 256
+  thresholds:
+    mode: 'optimal' # 'fixed', per_label_opt_f1, optimal
+    fixed_values: [0.5] # used if mode is 'fixed'
+  calibration:
+    enabled: true
+    method: 'temperature' # 'isotonic', 'platt', temperature, none
+    ece_bins: 15
+  selective:
+    coverage_levels: [1.0, 0.95, 0.9, 0.8, 0.7]
+outputs:
+  dir: 'reports'
+  save_predictions: true

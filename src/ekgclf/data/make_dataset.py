@@ -14,7 +14,6 @@ from ekgclf.data.transforms import bandpass, ensure_leads, resample, zscore
 logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger("ekgclf.data.make_dataset")
 
-
 def process_record(rec: dict, cfg: dict) -> dict:
     sig = rec["signals"]
     fs = rec["fs"]
@@ -40,7 +39,6 @@ def process_record(rec: dict, cfg: dict) -> dict:
         "mean": mean,
         "std": std,
     }
-
 
 def main():
     ap = argparse.ArgumentParser()

@@ -1,0 +1,12 @@
+model:
+  name: 'resnet1d'
+  in_channels: 12
+  base_channels: 64
+  blocks: [2, 2, 2, 2] #ResNet-18 architecture
+  kernel_size: 7
+  stride: 2
+  downsample: true
+  dropout: 0.1
+head:
+  num_labels: 30
+  bias_init: -2.0
