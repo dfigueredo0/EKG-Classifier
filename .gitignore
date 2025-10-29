@@ -2,6 +2,7 @@
 /data/
 
 .venv/
+.venv311/
 .env
 
 __pycache__/
