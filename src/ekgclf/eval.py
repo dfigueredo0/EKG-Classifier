@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 
 import hydra
-import matplotlib as plt
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from omegaconf import DictConfig, OmegaConf
@@ -51,7 +51,7 @@ def main(cfg: DictConfig):
     data_cfg = DataConfig(**load_yaml(CFG_ROOT / "configs" / "data.yaml"))
     model_cfg = ModelConfig(**load_yaml(CFG_ROOT / "configs" / "model.yaml"))
 
-    CKPT_PATH = Path(cfg.trainer.checkpoint_dir) / "best.pt"
+    CKPT_PATH = Path(cfg.eval.checkpoint_dir) / "best.pt"
     IDX_PATH = Path(data_cfg.paths.processed) / "ptbxl_index.json"
     
     setup_logging(CFG_ROOT / "configs" / "logging.yaml")
@@ -71,7 +71,7 @@ def main(cfg: DictConfig):
 
     pin = bool(torch.cuda.is_available())
     pids = [m["patient_id"] for m in index]
-    sp = patient_level_split(pids, 0.8, 0.1, 0.1, seed=cfg.trainer.seed)
+    sp = patient_level_split(pids, 0.8, 0.1, 0.1, seed=data_cfg.split.seed)
     ds = EvalDataset([index[i] for i in sp.test], labels_map)
     dl = DataLoader(ds, batch_size=cfg.eval.batch_size, shuffle=False, num_workers=4, pin_memory=pin)
 
@@ -126,18 +126,65 @@ def main(cfg: DictConfig):
     else:
         y_pred = (probs >= 0.5).astype(int)
 
+    class_names = getattr(ds, "CLASS_NAMES", None)
+    if not class_names:
+        class_names = [None for i in range(y_true.shape[1])]
+        for name, idx in labels_map.items():
+            if 0 <= idx < num_labels:
+                class_names[idx] = name
+        if any(n is None for n in class_names):
+            class_names = [f"class_{i}" for i in range(y_true.shape[1])]
+            
+    cm_cfg = getattr(cfg.eval, "cm", {})
+    include_labels = set(cm_cfg.get("include_labels", []) or [])
+    top_k = int(cm_cfg.get("top_k_by_support", 25))
+    min_support = int(cm_cfg.get("min_support", 0))        
+    
+    support = y_true.sum(axis=0)  
+    
+    selected = []
+    if include_labels:
+        name_to_idx = {name: i for i, name in enumerate(class_names)}
+        for name in include_labels:
+            if name in name_to_idx:
+                selected.append(name_to_idx[name])
+
+    # add top-K by support
+    remaining = [i for i in range(len(class_names)) if i not in selected]
+    remaining.sort(key=lambda i: support[i], reverse=True)
+    selected.extend(remaining[:max(0, top_k - len(selected))])
+
+    # drop below min_support
+    selected = [i for i in selected if support[i] >= min_support]
+    # keep stable order by support
+    selected.sort(key=lambda i: support[i], reverse=True)
+
+    if len(selected) == 0:
+        selected = list(range(min(len(class_names), 20)))  # hard fallback
+
+    sel_names = [class_names[i] for i in selected]
+    
     y_true_argmax = y_true.argmax(axis=1)
     y_pred_argmax = probs.argmax(axis=1)
+    sel_set = set(selected)
+    m = np.array([t in sel_set and p in sel_set for t, p in zip(y_true_argmax, y_pred_argmax)])
+    y_true_sel = y_true_argmax[m]
+    y_pred_sel = y_pred_argmax[m]
     
-    cm_raw = confusion_matrix(y_true_argmax, y_pred_argmax, labels=list(range(len(class_names))))
+    remap = {old: new for new, old in enumerate(selected)}
+    y_true_sel = np.vectorize(remap.get)(y_true_sel)
+    y_pred_sel = np.vectorize(remap.get)(y_pred_sel)
+
+    cm_raw = confusion_matrix(y_true_sel, y_pred_sel, labels=list(range(len(selected))))
+    
     # Row-normalized (each row sums to 1; handle divide-by-zero safely)
     row_sums = cm_raw.sum(axis=1, keepdims=True)
     cm_norm = np.divide(cm_raw, np.maximum(row_sums, 1), where=row_sums>0)
 
     with open(REPORTS_DIR / "confusion_matrix_raw.json", "w", encoding="utf-8") as f:
-        json.dump({"labels": class_names, "matrix": cm_raw.tolist()}, f, indent=2)
+        json.dump({"labels": sel_names, "matrix": cm_raw.tolist()}, f, indent=2)
     with open(REPORTS_DIR / "confusion_matrix_norm.json", "w", encoding="utf-8") as f:
-        json.dump({"labels": class_names, "matrix": cm_norm.tolist()}, f, indent=2)
+        json.dump({"labels": sel_names, "matrix": cm_norm.tolist()}, f, indent=2)
     
     # does not reflect multilabel co-occurrence; it’s a single-label proxy; for full multilabel views later, add per-class binary confusion matrices (one-vs-rest) and stack them in a grid.
     plots_dir = REPORTS_DIR / "plots"
@@ -147,9 +194,10 @@ def main(cfg: DictConfig):
     im = plt.imshow(cm_norm, interpolation="nearest")  # normalized for readability
     plt.title("Confusion Matrix (argmax, row-normalized)")
     plt.colorbar(im, fraction=0.046, pad=0.04)
-    tick_marks = np.arange(len(class_names))
-    plt.xticks(tick_marks, class_names, rotation=45, ha="right")
-    plt.yticks(tick_marks, class_names)
+    tick_marks = np.arange(len(sel_names))
+    plt.xticks(tick_marks, sel_names, rotation=45, ha="right", fontsize=8)
+    plt.yticks(tick_marks, sel_names, fontsize=8)
+    plt.gcf().set_size_inches(10, 8)
     plt.xlabel("Predicted label")
     plt.ylabel("True label")
     plt.tight_layout()
@@ -160,11 +208,9 @@ def main(cfg: DictConfig):
     np.save(REPORTS_DIR / "y_prob.npy", probs)
     np.save(REPORTS_DIR / "y_pred.npy", y_pred)
     
-    class_names = getattr(ds, "CLASS_NAMES", [str(i) for i in range(y_true.shape[1])])
     with open(REPORTS_DIR / "class_names.json", "w", encoding="utf-8") as f:
         json.dump(class_names, f, indent=2)
     
-
     ece = expected_calibration_error(y_true, probs, n_bins=cfg.eval.calibration.ece_bins)
 
     out = {

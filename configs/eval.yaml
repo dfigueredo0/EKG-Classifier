@@ -2,6 +2,7 @@ hydra:
   run:
     dir: .
 eval:
+  checkpoint_dir: ./checkpoints
   batch_size: 256
   thresholds:
     mode: 'optimal' # 'fixed', per_label_opt_f1, optimal
@@ -12,6 +13,10 @@ eval:
     ece_bins: 15
   selective:
     coverage_levels: [1.0, 0.95, 0.9, 0.8, 0.7]
+  cm:
+    include_labels: [] # e.g. ["AFIB","1AVB","RBBB","LBBB","NST_"]  (optional)
+    top_k_by_support: 25
+    min_support: 20
 outputs:
   dir: 'reports'
   save_predictions: true

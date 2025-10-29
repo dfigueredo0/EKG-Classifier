@@ -10,6 +10,9 @@ import hydra
 import numpy as np
 import torch
 import torch.nn as nn
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 from sklearn.metrics import f1_score
 from hydra.utils import get_original_cwd
 from omegaconf import DictConfig, OmegaConf
@@ -54,10 +57,6 @@ def _has_torch_cuda() -> bool:
 def _has_directml() -> bool:
     return importlib.util.find_spec("torch_directml") is not None
 
-@contextlib.contextmanager
-def _nullctx():
-    yield
-
 def setup_accelerator(cfg):
     """
     Returns:
@@ -79,31 +78,24 @@ def setup_accelerator(cfg):
             torch.backends.cudnn.allow_tf32 = True
         except Exception:
             pass
-
         use_amp = bool(cfg.trainer.amp and torch.cuda.is_available())
         scaler = torch.amp.GradScaler(enabled=use_amp)
         autocast_ctx = torch.amp.autocast(device_type="cuda", enabled=use_amp)
         notes = "torch.cuda (CUDA/ROCm)"
         
-        with torch.amp.autocast(device_type="cuda", enabled=use_amp):
-            logits = model(xb)
-            loss = criterion(logits, yb)
-        
         return device, autocast_ctx, scaler, notes
-
     elif _has_directml():  # Windows fallback for AMD via DirectML
         import torch_directml
         device = torch_directml.device()
         scaler = None  # AMP not supported via torch-directml
-        autocast_ctx = _nullctx()  # no AMP
+        autocast_ctx =  contextlib.nullcontext()
         notes = "torch-directml (DirectML)"
         return device, autocast_ctx, scaler, notes
-
     else:
         import torch
         device = torch.device("cpu")
         scaler = None
-        autocast_ctx = _nullctx()
+        autocast_ctx = contextlib.nullcontext()
         notes = "CPU"
         return device, autocast_ctx, scaler, notes
 
@@ -148,12 +140,11 @@ def build_model(cfg_m: ModelConfig, num_classes: int) -> Tuple[nn.Module, nn.Mod
             head.fc.bias.fill_(float(bias_init))
     return body, head
 
-
-def get_loss(cfg_t: TrainConfig, pos_weight: torch.Tensor | None):
-    if cfg_t.loss.get("focal_gamma"):
-        return FocalLossMultiLabel(cfg_t.loss["focal_gamma"], pos_weight)
-    return BCEWithLogitsSmooth(cfg_t.loss.get("label_smoothing", 0.0), pos_weight)
-
+def get_loss(loss_cfg, pos_weight: torch.Tensor | None):
+    if loss_cfg.get("focal_gamma"):
+        return FocalLossMultiLabel(float(loss_cfg.get("focal_gamma", None)), pos_weight)
+    smoothing = loss_cfg.get("label_smoothing", loss_cfg.get("laplace_smoothing", 0.0))
+    return BCEWithLogitsSmooth(smoothing, pos_weight)
 
 def compute_class_weights(index: list[dict], labels_map: dict[str, int]) -> torch.Tensor:
     counts = np.zeros(len(labels_map), dtype=np.int64)
@@ -166,7 +157,6 @@ def compute_class_weights(index: list[dict], labels_map: dict[str, int]) -> torc
     # inverse freq with floor
     weights = 1.0 / np.clip(pos_freq, 1e-3, None)
     return torch.tensor(weights, dtype=torch.float32)
-
 
 @hydra.main(version_base=None, config_path="../../configs", config_name="train")
 def main(cfg: DictConfig):
@@ -208,25 +198,22 @@ def main(cfg: DictConfig):
 
     train_bs = cfg.trainer.batch_size
     eval_bs  = getattr(getattr(cfg, "eval", None), "batch_size", 256)
-    pin      = (backend_notes != "CPU")
+    pin = isinstance(device, torch.device) and device.type == "cuda"
     dl_train, dl_val = make_fast_loaders(ds_train, ds_val, train_bs, eval_bs, pin=pin)
 
-    device = torch.device(device="cuda" if torch.cuda.is_available() else "cpu")
     body, head = build_model(model_cfg, num_labels)
     model = torch.nn.Sequential(body, head).to(device)
 
     pos_weight = None
-    if cfg.class_weights.get("use_class_freq_weights", False):
+    if cfg.class_weights.get("use_class_weights", False):
         pos_weight = compute_class_weights([index[i] for i in sp.train], labels_map).to(device)
 
-    criterion = get_loss(cfg.trainer, pos_weight)
+    criterion = get_loss(cfg.loss, pos_weight)
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.trainer.lr, weight_decay=cfg.trainer.wd)
     if cfg.trainer.lr_scheduler == "cosine":
         sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=cfg.trainer.epochs)
     else:
         sched = torch.optim.lr_scheduler.StepLR(opt, step_size=10, gamma=0.1)
-
-    scaler = torch.amp.GradScaler(enabled=cfg.trainer.amp and torch.cuda.is_available())
 
     best_score = -1.0
     ckpt_dir = Path(cfg.trainer.checkpoint_dir)
@@ -293,7 +280,7 @@ def main(cfg: DictConfig):
         ys_tr, ps_tr = [], []
         with torch.no_grad():
             for xb, yb in dl_train:
-                xb, yb = xb.to(device), yb.to(device)
+                xb, yb = to_device(xb, device), to_device(yb, device)
                 logits = model(xb)
                 ps_tr.append(torch.sigmoid(logits).cpu().numpy())
                 ys_tr.append(yb.cpu().numpy())
@@ -302,11 +289,12 @@ def main(cfg: DictConfig):
         y_pred_tr = (y_prob_tr >= 0.5).astype(int)
         tr_acc = f1_score(y_true_tr.ravel(), y_pred_tr.ravel())
 
-        aurocs = auroc_per_label(y_true, y_prob)
-        macro = float(aurocs["macro"])
+        macro = auroc_per_label(y_true, y_prob)
         LOGGER.info(
-            "Epoch %d train_loss=%.4f val_loss=%.4f val_macro_auroc=%.4f val_microF1(acc)=%.4f",
-            epoch, train_loss_epoch, val_loss_epoch, macro, val_acc
+            "Epoch %d train_loss=%.4f val_loss=%.4f val_macro_auroc=%s val_microF1(acc)=%.4f",
+            epoch, train_loss_epoch, val_loss_epoch,
+            f"{macro:.4f}" if np.isfinite(macro) else "nan",
+            val_acc
         )
 
         if run:
@@ -332,10 +320,30 @@ def main(cfg: DictConfig):
 
         sched.step()
 
+    plots_dir = report_dir / "plots"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+
+    # Loss
+    plt.figure(figsize=(7,4))
+    plt.plot(history["loss"], label="train")
+    plt.plot(history["val_loss"], label="val")
+    plt.title("Loss")
+    plt.xlabel("Epoch"); plt.ylabel("BCE")
+    plt.legend(); plt.tight_layout()
+    plt.savefig(plots_dir / "loss.png", dpi=160); plt.close()
+
+    # “Accuracy” proxy (micro-F1)
+    plt.figure(figsize=(7,4))
+    plt.plot(history["acc"], label="train micro-F1")
+    plt.plot(history["val_acc"], label="val micro-F1")
+    plt.title("Micro-F1")
+    plt.xlabel("Epoch"); plt.ylabel("F1")
+    plt.legend(); plt.tight_layout()
+    plt.savefig(plots_dir / "micro_f1.png", dpi=160); plt.close()
+
     if run:
         import mlflow
         mlflow.end_run()
-
 
 if __name__ == "__main__":
     main()
