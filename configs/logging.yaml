@@ -1,7 +1,7 @@
 version: 1
 formatters:
   json:
-    '()': ekgclf.utils.logging.JsonFormatter
+    '()': ekgclf.utils.logfmt.JsonFormatter
     fmt: '%(asctime)s %(levelname)s %(name)s %(message)s'
 handlers:
   console:

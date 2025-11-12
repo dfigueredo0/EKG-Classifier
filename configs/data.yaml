@@ -29,6 +29,7 @@ ptbxl:
   use_scored_subset: true
   min_lead_count: 12
 mitbih:
+  split_csv: 'splits/mitbih_windows_trainvaltest.csv'
   use_for_rhythm_generalization: true
 io:
   num_workers: 4

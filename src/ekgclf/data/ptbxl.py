@@ -61,7 +61,6 @@ def _load_ptbxl_metadata(root: Path) -> pd.DataFrame:
 
     return df_meta
 
-
 def read_wfdb_record(path_prefix: Path) -> Tuple[np.ndarray, int, List[str]]:
     """
     Read a WFDB record via its prefix (no extension).
@@ -72,7 +71,6 @@ def read_wfdb_record(path_prefix: Path) -> Tuple[np.ndarray, int, List[str]]:
     sig = rec.p_signal  # [T, leads]
     leads = [str(n) for n in rec.sig_name]
     return sig.astype(np.float32), fs, leads
-
 
 def iter_ptbxl(
     root: str | Path,

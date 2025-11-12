@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import json
+import json as _json
 import logging
 import contextlib, time, importlib
 from pathlib import Path
@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import f1_score
 from hydra.utils import get_original_cwd
 from omegaconf import DictConfig, OmegaConf
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 
 from ekgclf.metrics import auroc_per_label
 from ekgclf.models.head_multilabel import MultiLabelHead
@@ -173,23 +173,42 @@ def main(cfg: DictConfig):
 
     # Load processed index
     proc_dir = Path(data_cfg.paths.processed)
-    index_path = proc_dir / "ptbxl_index.json"
-    if not index_path.exists():
-        raise FileNotFoundError(f"Missing processed index at {index_path}")
-    import json as _json
+    ptb_idx_path = proc_dir / "ptbxl_index.json"
+    mit_idx_path = proc_dir / "mitbih_index.json"
+    
+    if not ptb_idx_path.exists():
+        raise FileNotFoundError(f"Missing processed index at {ptb_idx_path}")
 
-    index = _json.load(open(index_path, "r", encoding="utf-8"))
+    ptb_index = _json.load(open(ptb_idx_path, "r", encoding="utf-8"))
+    for m in ptb_index:
+        m.setdefault("source", "ptbxl")
+
+    mit_index = []
+    if mit_idx_path.exists():
+        mit_index = _json.load(open(mit_idx_path, "r", encoding="utf-8"))
+        for m in mit_index:
+            m.setdefault("source", "mitbih")
+
+    index = ptb_index + mit_index
+    if len(index) == 0:
+        raise RuntimeError("No samples found in either ptbxl_index.json or mitbih_index.json")
 
     # Build label map from corpus
     labels = sorted({l for m in index for l in m["labels"]})
     labels_map = {l: i for i, l in enumerate(labels)}
     num_labels = len(labels)
-    LOGGER.info("Num labels: %d", num_labels)
+    LOGGER.info("Num labels (PTB-XL ∪ MIT-BIH): %d", num_labels)
 
     # Dataset split by patient ID
     from ekgclf.data.splitter import patient_level_split
-    pids = [m["patient_id"] for m in index]
+    
+    def pid_key(m):
+    # patient_id is expected in your processed JSON; prefix with source to avoid collisions
+        return f'{m.get("source","unk")}:{m["patient_id"]}'
+
+    pids = [pid_key(m) for m in index]
     sp = patient_level_split(pids, train=0.8, val=0.1, test=0.1, seed=cfg.trainer.seed)
+    
     ds_train = EKGDataset([index[i] for i in sp.train], labels_map)
     ds_val = EKGDataset([index[i] for i in sp.val], labels_map)
     
@@ -199,7 +218,18 @@ def main(cfg: DictConfig):
     train_bs = cfg.trainer.batch_size
     eval_bs  = getattr(getattr(cfg, "eval", None), "batch_size", 256)
     pin = isinstance(device, torch.device) and device.type == "cuda"
-    dl_train, dl_val = make_fast_loaders(ds_train, ds_val, train_bs, eval_bs, pin=pin)
+    
+    num_workers = OmegaConf.select(cfg, "data.num_workers", default=4)
+    
+    srcs_train = np.array([m.get("source","ptbxl") for m in [index[i] for i in sp.train]])
+    n_ptb = (srcs_train == "ptbxl").sum()
+    n_mit = (srcs_train == "mitbih").sum()
+    w = np.where(srcs_train == "ptbxl", 1.0 / max(1, n_ptb), 1.0 / max(1, n_mit))
+    sampler = WeightedRandomSampler(w, num_samples=len(w), replacement=True)
+
+    dl_train = DataLoader(ds_train, batch_size=train_bs, sampler=sampler, pin_memory=pin, num_workers=num_workers)
+    
+    _, dl_val = make_fast_loaders(ds_train, ds_val, train_bs, eval_bs, pin=pin)
 
     body, head = build_model(model_cfg, num_labels)
     model = torch.nn.Sequential(body, head).to(device)
@@ -316,7 +346,7 @@ def main(cfg: DictConfig):
         history["val_loss"].append(float(val_loss_epoch))
         history["acc"].append(float(tr_acc))
         history["val_acc"].append(float(val_acc))
-        history_path.write_text(json.dumps(history, indent=2))
+        history_path.write_text(_json.dumps(history, indent=2))
 
         sched.step()
 

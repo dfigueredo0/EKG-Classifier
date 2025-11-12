@@ -17,6 +17,8 @@ trainer:
     patience: 10
     mode: 'max'
   checkpoint_dir: './checkpoints'
+data:
+  num_workers: 4
 loss:
   name: 'bce_logits'
   laplace_smoothing: 0.1

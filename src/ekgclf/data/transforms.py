@@ -6,7 +6,6 @@ from scipy import signal
 
 LOGGER = logging.getLogger("ekgclf.data.transforms")
 
-
 def resample(sig: np.ndarray, orig_fs: int, target_fs: int) -> np.ndarray:
     if orig_fs == target_fs:
         return sig
@@ -15,19 +14,16 @@ def resample(sig: np.ndarray, orig_fs: int, target_fs: int) -> np.ndarray:
     out = signal.resample(sig, tgt_len, axis=0)
     return out.astype(np.float32)
 
-
 def bandpass(sig: np.ndarray, fs: int, low: float, high: float, order: int = 4) -> np.ndarray:
     nyq = 0.5 * fs
     b, a = signal.butter(order, [low / nyq, high / nyq], btype="band")
     return signal.filtfilt(b, a, sig, axis=0).astype(np.float32)
-
 
 def zscore(sig: np.ndarray, eps: float = 1e-6) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     mean = sig.mean(axis=0, keepdims=True)
     std = sig.std(axis=0, keepdims=True)
     norm = (sig - mean) / (std + eps)
     return norm.astype(np.float32), mean.squeeze(0), std.squeeze(0)
-
 
 def _canon_lead(name: str) -> str:
     """Canonicalize lead names to match ['I','II','III','aVR','aVL','aVF','V1'..'V6']."""
