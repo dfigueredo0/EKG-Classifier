@@ -5,7 +5,7 @@ def test_ece_basic():
     y = np.array([[1,0],[0,1],[1,0],[0,1]])
     p = np.array([[0.9,0.1],[0.1,0.9],[0.8,0.2],[0.2,0.8]])
     ece = expected_calibration_error(y,p,n_bins=10)
-    assert 0 <= ece <= 0.1
+    assert np.isclose(ece, 0.15, atol=1e-6)
 
 def test_auroc_f1_shapes():
     y = np.array([[1,0,1],[0,1,0]])

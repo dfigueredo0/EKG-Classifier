@@ -18,7 +18,7 @@ class InferenceResult:
 class InferenceEngine:
     def __init__(self, ckpt_path: str = "checkpoints/best.pt", device: Optional[str] = None, threshold: float = 0.5):
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
-        ckpt = torch.load(ckpt_path, map_location="cpu")
+        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
         self.labels_map = ckpt["labels_map"]
         num_labels = len(self.labels_map)
         self.model = torch.nn.Sequential(ResNet1D(), MultiLabelHead(256, num_labels)).to(self.device).eval()
