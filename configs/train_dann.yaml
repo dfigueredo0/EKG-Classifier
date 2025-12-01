@@ -1,0 +1,28 @@
+trainer:
+  batch_size: 64
+  epochs: 50
+  lr: 1e-4
+  wd: 1e-4
+  grad_clip_norm: 5.0
+  lr_scheduler: 'cosine'
+  amp: true
+  seed: 42
+  checkpoint_dir: 'checkpoints/dann'
+
+loss:
+  focal_gamma: 2.0 # or null if you want plain BCE smooth
+  label_smoothing: 0.05
+
+class_weights:
+  use_class_weights: true
+
+dann:
+  domain_loss_weight: 0.5 # λ_dom
+
+mlflow:
+  enable: false
+  tracking_uri: ''
+  experiment: 'ekg-dann'
+
+data:
+  num_workers: 8

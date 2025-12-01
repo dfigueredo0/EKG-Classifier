@@ -50,7 +50,7 @@ class BasicBlock1D(nn.Module):
         self.shortcut = nn.Sequential(
             nn.Conv1d(in_channel, out_channel, kernel_size=1, stride=self.stride, bias=False),
             nn.BatchNorm1d(out_channel),
-        )                                                                                                               
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         self._ensure_channels(x)

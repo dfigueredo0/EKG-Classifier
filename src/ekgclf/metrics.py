@@ -32,7 +32,6 @@ def auroc_per_label(y_true, y_prob):
         "micro": float(micro),
     }
 
-
 def f1_per_label(y_true, y_pred):
     y_true = np.asarray(y_true)
     y_pred = np.asarray(y_pred)

@@ -10,6 +10,9 @@ readme = "README.md"
 include = "ekgclf"
 from = "src"
 
+[poetry.tool.projects.scripts]
+ekgclf-api = "ekgclf.api::app"
+
 [tool.poetry.dependencies]
 python = ">=3.11" 
 numpy = "^2.0.4"

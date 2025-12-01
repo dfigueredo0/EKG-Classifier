@@ -1,0 +1,30 @@
+diffusion:
+  # label handling
+  rare_labels: [] # explicit list like ["NORM", "MI", "STTC"]; if empty, auto-select by count
+  auto_max_count: 200 # labels with support ≤ this are treated as "rare"
+  in_channels: 12
+  segment_len: 2048
+  max_segments_per_record: 4
+  batch_size: 32
+  num_workers: 4
+  seed: 123
+  base_channels: 32
+  time_dim: 64
+  num_steps: 1000
+  lr: 1e-4
+  weight_decay: 1e-4
+  grad_clip: 1.0
+  epochs: 50
+  checkpoint_dir: 'checkpoints/diffusion'
+sampling:
+  checkpoint_path: 'checkpoints/diffusion/diffusion_best.pt'
+  out_root: 'data/synthetic'
+  in_channels: 12
+  base_channels: 32
+  time_dim: 64
+  segment_len: 2048
+  num_steps: 250
+  labels: [] # e.g. ["NORM", "MI", "STTC"]
+  samples_per_label: 250
+  batch_size: 128
+  device: 'auto'

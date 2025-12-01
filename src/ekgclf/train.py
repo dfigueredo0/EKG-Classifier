@@ -3,6 +3,7 @@ from __future__ import annotations
 import json as _json
 import logging
 import contextlib, time, importlib
+import glob
 from pathlib import Path
 from typing import Tuple
 
@@ -18,6 +19,8 @@ from hydra.utils import get_original_cwd
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 
+from ekgclf.utils.data_utils import make_class_balanced_sampler
+from ekgclf.data.augemntations import ECGAugment
 from ekgclf.metrics import auroc_per_label
 from ekgclf.models.head_multilabel import MultiLabelHead
 from ekgclf.models.losses import BCEWithLogitsSmooth, FocalLossMultiLabel
@@ -28,23 +31,49 @@ from ekgclf.tracking import log_dict, start_run
 LOGGER = logging.getLogger("ekgclf.train")
 
 class EKGDataset(Dataset):
-    def __init__(self, index: list[dict], labels_map: dict[str, int]):
+    def __init__(self, index: list[dict], labels_map: dict[str, int], synthetic_root=None, synthetic_ratio=0.3, augment=False):
         self.index = index
         self.labels_map = labels_map
         self.num_labels = len(labels_map)
+        self.augment = ECGAugment() if augment else None
+        
+        self.synthetic = []
+        if synthetic_root:
+            for lbl, idx in labels_map.items():
+                folder = Path(synthetic_root) / lbl
+                if folder.exists():
+                    for f in folder.glob("*.npy"):
+                        self.synthetic.append((str(f), idx))
+
+        self.synthetic_ratio = synthetic_ratio
 
     def __len__(self):
+        if self.synthetic:  # only extend if we actually have synthetic samples
+            return len(self.index) + int(len(self.index) * self.synthetic_ratio)
         return len(self.index)
 
     def __getitem__(self, i: int):
-        meta = self.index[i]
-        npz = np.load(meta["npz"])
-        x = npz["signals"]  # [T, C]
-        x = torch.from_numpy(x).float().transpose(0, 1)  # [C, T]
-        y = torch.zeros(self.num_labels, dtype=torch.float32)
-        for lab in meta["labels"]:
-            if lab in self.labels_map:
-                y[self.labels_map[lab]] = 1.0
+        if self.synthetic and i >= len(self.index):
+            sidx = i - len(self.index)
+            path, cls_idx = self.synthetic[sidx % len(self.synthetic)]
+            x = np.load(path)  # shape [C, T] or [T, C]
+            if x.shape[-1] < x.shape[0]:
+                x = x.T  # ensure [C, T]
+            x = torch.from_numpy(x).float()
+
+            y = torch.zeros(self.num_labels)
+            y[cls_idx] = 1.0
+        else:
+            meta = self.index[i]
+            npz = np.load(meta["npz"])
+            x = npz["signals"]  # [T, C]
+            x = torch.from_numpy(x).float().transpose(0, 1)  # [C, T]
+            if self.augment:
+                x = self.augment(x)
+            y = torch.zeros(self.num_labels, dtype=torch.float32)
+            for lab in meta["labels"]:
+                if lab in self.labels_map:
+                    y[self.labels_map[lab]] = 1.0
         return x, y
 
 def _has_torch_cuda() -> bool:
@@ -98,6 +127,19 @@ def setup_accelerator(cfg):
         autocast_ctx = contextlib.nullcontext()
         notes = "CPU"
         return device, autocast_ctx, scaler, notes
+
+def build_train_loader(dataset, cfg):
+    if cfg.trainer.class_balanced_sampling:
+        sampler = make_class_balanced_sampler(dataset)
+        return DataLoader(dataset,
+                          batch_size=cfg.trainer.batch_size,
+                          sampler=sampler,
+                          num_workers=cfg.trainer.num_workers)
+    else:
+        return DataLoader(dataset,
+                          batch_size=cfg.trainer.batch_size,
+                          shuffle=True,
+                          num_workers=cfg.trainer.num_workers)
 
 def make_fast_loaders(ds_train, ds_val, train_bs, eval_bs, pin=True):
     """
@@ -209,8 +251,24 @@ def main(cfg: DictConfig):
     pids = [pid_key(m) for m in index]
     sp = patient_level_split(pids, train=0.8, val=0.1, test=0.1, seed=cfg.trainer.seed)
     
-    ds_train = EKGDataset([index[i] for i in sp.train], labels_map)
-    ds_val = EKGDataset([index[i] for i in sp.val], labels_map)
+    synthetic_root  = getattr(cfg.trainer, "synthetic_root", None)
+    synthetic_ratio = float(getattr(cfg.trainer, "synthetic_ratio", 0.0))
+
+    ds_train = EKGDataset(
+        [index[i] for i in sp.train],
+        labels_map,
+        synthetic_root=synthetic_root,
+        synthetic_ratio=synthetic_ratio,
+        augment=True,
+    )
+    
+    ds_val = EKGDataset(
+        [index[i] for i in sp.val],
+        labels_map,
+        synthetic_root=None,  
+        synthetic_ratio=0.0,
+        augment=False,
+    )
     
     device, autocast_ctx, scaler, backend_notes = setup_accelerator(cfg)
     LOGGER.info("Accelerator backend: %s", backend_notes)
@@ -227,7 +285,7 @@ def main(cfg: DictConfig):
     w = np.where(srcs_train == "ptbxl", 1.0 / max(1, n_ptb), 1.0 / max(1, n_mit))
     sampler = WeightedRandomSampler(w, num_samples=len(w), replacement=True)
 
-    dl_train = DataLoader(ds_train, batch_size=train_bs, sampler=sampler, pin_memory=pin, num_workers=num_workers)
+    dl_train = build_train_loader(ds_train, cfg)
     
     _, dl_val = make_fast_loaders(ds_train, ds_val, train_bs, eval_bs, pin=pin)
 
@@ -319,7 +377,9 @@ def main(cfg: DictConfig):
         y_pred_tr = (y_prob_tr >= 0.5).astype(int)
         tr_acc = f1_score(y_true_tr.ravel(), y_pred_tr.ravel())
 
-        macro = auroc_per_label(y_true, y_prob)
+        aucs = auroc_per_label(y_true, y_prob)
+        macro = float(aucs["macro"])
+
         LOGGER.info(
             "Epoch %d train_loss=%.4f val_loss=%.4f val_macro_auroc=%s val_microF1(acc)=%.4f",
             epoch, train_loss_epoch, val_loss_epoch,

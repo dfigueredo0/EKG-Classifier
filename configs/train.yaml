@@ -4,6 +4,7 @@ hydra:
 trainer:
   epochs: 100
   batch_size: 64
+  num_workers: 4
   lr: 0.001
   wd: 1e-4
   lr_scheduler: 'cosine'
@@ -11,7 +12,10 @@ trainer:
   grad_clip_norm: 5.0
   amp: true
   deterministic: true
-  seed: 0
+  seed: 42
+  class_balanced_sampling: true
+  synthetic_root: 'data/synthetic'
+  synthetic_ratio: 0.3
   early_stopping:
     monitor: 'val/macro_auroc'
     patience: 10
@@ -20,8 +24,8 @@ trainer:
 data:
   num_workers: 4
 loss:
-  name: 'bce_logits'
-  laplace_smoothing: 0.1
+  name: 'focal_gamma'
+  laplace_smoothing: 0.05
   pos_weight: null #tensor of shape [num_classes], set to null for no weighting
   focal_gamma: 2.0 #set to 0.0 for no focal loss
 class_weights:
