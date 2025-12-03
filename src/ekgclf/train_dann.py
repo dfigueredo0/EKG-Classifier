@@ -42,7 +42,7 @@ class EKGDomainDataset(Dataset):
         npz = np.load(meta['npz'])
         x = npz['signals']
         x = torch.from_numpy(x).float().transpose(0, 1)
-        y = torch.zeros(self.num_labels, dtype=np.float32)
+        y = torch.zeros(self.num_labels, dtype=torch.float32)
         
         for lbl in meta['labels']:
             if lbl in self.labels_map:
@@ -179,7 +179,9 @@ def main(cfg: DictConfig):
 
     ds_train = EKGDomainDataset([index[i] for i in sp.train], labels_map)
     ds_val   = EKGDomainDataset([index[i] for i in sp.val], labels_map)
-
+    ds_test  = EKGDomainDataset([index[i] for i in sp.test], labels_map)
+    dl_test  = DataLoader(ds_test, batch_size=1, shuffle=False, num_workers=2)
+    
     device, autocast_ctx, scaler, backend_notes = setup_accelerator(cfg)
     LOGGER.info("Accelerator backend: %s", backend_notes)
 
