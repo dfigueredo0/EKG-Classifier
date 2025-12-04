@@ -57,8 +57,9 @@ poetry install
 
 ### 3. Activate the environment
 ```bash
-poetry activate
+poetry env activate
 ```
+Copy and Paste the printed command to active the environment.
 
 ---
 
