@@ -53,6 +53,7 @@ cd EKG-Classifier
 ### 2. Install dependencies
 ```bash
 poetry install
+pip install torch
 ```
 
 ### 3. Activate the environment
